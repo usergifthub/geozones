@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TEST GEOZONES 123</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css">
+  <style>
+    html, body { height: 100%; margin: 0; }
+    #map { height: 100%; width: 100%; }
+	#map-buttons {
+    position: absolute;
+    top: 10px;
+    left: 55px;
+    z-index: 1000;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+#map-buttons button,
+#map-buttons label {
+    background: white;
+    border: 1px solid #999;
+    border-radius: 4px;
+    padding: 8px 12px;
+    font: 14px Arial;
+    cursor: pointer;
+}
+
+#map-buttons input {
+    display: none;
+}
+.color-picker {
+    background: white;
+    border: 1px solid #999;
+    border-radius: 4px;
+    padding: 8px 12px;
+    font: 14px Arial;
+    cursor: pointer;
+}
+.zone-label {
+    background: white;
+    border: 1px solid #555;
+    border-radius: 4px;
+    padding: 3px 7px;
+    font-weight: bold;
+    color: #222;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+}
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="map-buttons">
+	<button onclick="exportZones()">Зберегти геозони</button>
+
+    <label>
+        Завантажити геозони
+        <input type="file" id="importFile" accept=".geojson,.json" onchange="importZones(event)">
+    </label>
+	<label class="color-picker">
+    Колір зони:
+    <input type="color" id="zoneColor" value="#0066ff">
+	</label>
+</div>
+<div id="zoneEditor" style="
+    display:none;
+    position:absolute;
+    top:55px;
+    left:10px;
+    z-index:1000;
+    background:white;
+    padding:12px;
+    border:1px solid #999;
+    border-radius:6px;
+    box-shadow:0 2px 8px #999;
+">
+    <b>Редагування геозони</b><br><br>
+
+    Назва:<br>
+    <input type="text" id="editZoneName"><br><br>
+
+    Колір заливки:<br>
+	<input type="color" id="editZoneColor"><br><br>
+
+	Колір контуру:<br>
+	<input type="color" id="editBorderColor"><br><br>
+
+    <button onclick="saveZoneChanges()">Зберегти</button>
+    <button onclick="closeZoneEditor()">Закрити</button>
+</div>
+<script type="text/javascript">
+const testConst = "CONST OK";
+let testLet = "LET OK";
+
+</script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+  <script>
+    const map = L.map('map').setView([51.337, 26.602], 13);
+
+    // 1. Звичайна карта Esri
+const streetMap = L.tileLayer(
+  'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+  {
+    maxZoom: 19,
+    attribution: 'Tiles &copy; Esri'
+  }
+);
+
+// 2. Супутникова карта Esri
+const satelliteMap = L.tileLayer(
+  'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+  {
+    maxZoom: 19,
+    attribution: 'Tiles &copy; Esri'
+  }
+);
+
+// 3. Топографічна карта
+const topoMap = L.tileLayer(
+  'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+  {
+    maxZoom: 17,
+    attribution: '&copy; OpenTopoMap'
+  }
+);
+
+// 4. Світла карта
+const lightMap = L.tileLayer(
+  'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+  {
+    maxZoom: 16,
+    attribution: 'Tiles &copy; Esri'
+  }
+);
+
+// Початкова підкладка
+streetMap.addTo(map);
+
+// Перемикач карт
+const baseMaps = {
+  "Звичайна карта": streetMap,
+  "Супутник": satelliteMap,
+  "Топографічна": topoMap,
+  "Світла карта": lightMap,
+
+  "OpenStreetMap": L.tileLayer(
+  'https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',
+  {
+    attribution: '&copy; OpenStreetMap contributors',
+    maxZoom: 20
+  }
+)
+};
+
+// Додаємо перемикач у правий верхній кут
+L.control.layers(baseMaps, null, {
+  collapsed: false
+}).addTo(map);
+// Група для збереження намальованих геозон
+const drawnItems = new L.FeatureGroup();
+map.addLayer(drawnItems);
+
+// Налаштування інструментів малювання
+const drawControl = new L.Control.Draw({
+    position: 'topleft',
+
+    draw: {
+        polygon: {
+            allowIntersection: false,
+            showArea: true,
+            shapeOptions: {
+                color: '#0066ff',
+                fillColor: '#3388ff',
+                fillOpacity: 0.25,
+                weight: 3
+            }
+        },
+
+        rectangle: false,
+        circle: false,
+        circlemarker: false,
+        marker: false,
+        polyline: false
+    },
+
+    edit: {
+        featureGroup: drawnItems,
+        remove: true
+    }
+});
+
+// Відображаємо панель інструментів
+map.addControl(drawControl);
+
+// Подія завершення малювання
+map.on(L.Draw.Event.CREATED, function (event) {
+    const layer = event.layer;
+
+    // Отримуємо вибраний колір
+    const color = document.getElementById('zoneColor').value;
+
+    // Запитуємо назву геозони
+    const name = prompt('Введіть назву геозони:', 
+        'Геозона ' + (drawnItems.getLayers().length + 1));
+
+    // Якщо назву не ввели або скасували — використовуємо стандартну
+    const zoneName = (name && name.trim()) 
+        ? name.trim() 
+        : 'Геозона ' + (drawnItems.getLayers().length + 1);
+
+    // Застосовуємо колір
+    layer.setStyle({
+        color: color,
+        fillColor: color,
+        fillOpacity: 0.25,
+        weight: 3
+    });
+
+    // Записуємо назву та колір у властивості геозони
+    layer.feature = layer.feature || {
+        type: 'Feature',
+        properties: {}
+    };
+
+    layer.feature.properties.name = zoneName;
+    layer.feature.properties.color = color;
+
+    // Показуємо назву на карті
+    layer.bindTooltip(zoneName, {
+        permanent: true,
+        direction: 'center',
+        className: 'zone-label'
+    });
+
+    // Додаємо геозону
+    drawnItems.addLayer(layer);
+
+    console.log('Геозону створено:', layer.toGeoJSON());
+});
+// Поточна геозона, яку редагуємо
+let selectedZone = null;
+
+// Відкриття редактора при натисканні на геозону
+drawnItems.on('click', function(e) {
+    selectedZone = e.layer;
+
+    var properties = selectedZone.feature && selectedZone.feature.properties
+    ? selectedZone.feature.properties
+    : {};
+
+document.getElementById('editZoneName').value =
+    properties.name || '';
+
+document.getElementById('editZoneColor').value =
+    properties.color || '#0066ff';
+
+document.getElementById('editBorderColor').value =
+    properties.borderColor || '#222222';
+
+    document.getElementById('zoneEditor').style.display = 'block';
+});
+
+// Збереження змін
+function saveZoneChanges() {
+    if (!selectedZone) return;
+
+    const name = document.getElementById('editZoneName').value.trim();
+    const color = document.getElementById('editZoneColor').value;
+	const borderColor = document.getElementById('editBorderColor').value;
+
+    selectedZone.feature = selectedZone.feature || {
+        type: 'Feature',
+        properties: {}
+    };
+
+    selectedZone.feature.properties.name = name;
+    selectedZone.feature.properties.color = color;
+	selectedZone.feature.properties.borderColor = borderColor;
+
+    selectedZone.setStyle({
+    color: borderColor,
+    fillColor: color,
+    fillOpacity: 0.25,
+    weight: 4
+	});
+
+    selectedZone.unbindTooltip();
+
+    if (name) {
+        selectedZone.bindTooltip(name, {
+            permanent: true,
+            direction: 'center',
+            className: 'zone-label'
+        });
+    }
+
+    closeZoneEditor();
+}
+
+// Закриття редактора
+function closeZoneEditor() {
+    document.getElementById('zoneEditor').style.display = 'none';
+    selectedZone = null;
+}
+// Експорт геозон у GeoJSON
+function exportZones() {
+    const data = drawnItems.toGeoJSON();
+
+    const blob = new Blob(
+        [JSON.stringify(data, null, 2)],
+        { type: 'application/geo+json' }
+    );
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+
+    link.href = url;
+    link.download = 'geozones.geojson';
+    link.click();
+
+    URL.revokeObjectURL(url);
+}
+
+// Автоматичне завантаження геозон із локального GeoJSON-файлу
+function loadZonesAutomatically() {
+
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "geozones.geojson", true);
+
+    xhr.onreadystatechange = function() {
+        if (xhr.readyState === 4) {
+            if (xhr.status === 200 || xhr.status === 0) {
+                try {
+                    var data = JSON.parse(xhr.responseText);
+                    var imported = L.geoJSON(data, {
+                        style: function(feature) {
+                            var properties = feature.properties || {};
+                            var color = properties.color || '#0066ff';
+                            var borderColor = properties.borderColor || color;
+                            return {
+                                color: borderColor,
+                                fillColor: color,
+                                fillOpacity: 0.25,
+                                weight: 3
+                            };
+                        },
+                        onEachFeature: function(feature, layer) {
+                            var properties = feature.properties || {};
+                            var name = properties.name || '';
+                            if (name) {
+                                layer.bindTooltip(name, {
+                                    permanent: true,
+                                    direction: 'center',
+                                    className: 'zone-label'
+                                });
+                            }
+                        }
+                    });
+
+                    imported.eachLayer(function(layer) {
+                        drawnItems.addLayer(layer);
+                    });
+
+                    if (drawnItems.getLayers().length > 0) {
+                        map.fitBounds(drawnItems.getBounds());
+                    }
+                } catch (error) {
+                    alert("Помилка обробки GeoJSON: " + error.message);
+                }
+            } else {
+                alert("Не вдалося завантажити файл геозон. Код: " + xhr.status);
+            }
+        }
+    };
+
+    xhr.send();
+}
+
+// Імпорт геозон вручну через кнопку
+function importZones(event) {
+    const file = event.target.files[0];
+
+    if (!file) return;
+
+    const reader = new FileReader();
+
+    reader.onload = function(e) {
+        try {
+            const data = JSON.parse(e.target.result);
+
+            const imported = L.geoJSON(data, {
+    style: function(feature) {
+        var color = feature.properties && feature.properties.color
+    	? feature.properties.color
+    	: '#0066ff';
+
+        return {
+            color: color,
+            fillColor: color,
+            fillOpacity: 0.25,
+            weight: 3
+        };
+    },
+
+    onEachFeature: function(feature, layer) {
+        var name = feature.properties && feature.properties.name
+    	? feature.properties.name
+    	: '';
+
+        if (name) {
+            layer.bindTooltip(name, {
+                permanent: true,
+                direction: 'center',
+                className: 'zone-label'
+            });
+        }
+    }
+});
+
+            imported.eachLayer(function(layer) {
+                drawnItems.addLayer(layer);
+            });
+
+            if (drawnItems.getLayers().length > 0) {
+                map.fitBounds(drawnItems.getBounds());
+            }
+
+        } catch (error) {
+            alert('Помилка читання GeoJSON-файлу');
+        }
+
+        event.target.value = '';
+    };
+
+    reader.readAsText(file);
+}
+function testFrom1C() {
+    alert("JavaScript працює! Виклик із 1С успішний.");
+}
+// Автоматично завантажуємо геозони після створення карти та групи drawnItems
+loadZonesAutomatically();
+  </script>
+</body>
+</html>
